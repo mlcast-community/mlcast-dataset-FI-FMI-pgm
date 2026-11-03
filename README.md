@@ -16,7 +16,7 @@ Please refer to the repository `LICENSE` file for the license that applies to th
 ## Dataset overview
 
 | | |
-|---|---|
+| --- | --- |
 | Product | FMI composite of the lowest radar sweeps (`lowest` CAPPI), `FIN_SUOMI1` area |
 | Variable | `dbz`: equivalent reflectivity factor (dBZ), from the `CorrectedReflectivity` field |
 | Timestep | 5 minutes |
@@ -50,10 +50,11 @@ The final dataset is stored in **Zarr v3** format.
 ### 1. Build the inventory
 
 The source data are gzip-compressed binary PGM (`P5`) files, one per
-timestep, in FMI's internal radar archive:
+timestep, in FMI's internal radar archive (root directory set by
+`ARCHIVE_ROOT` in `config.py`):
 
-```
-/arch/radar/storage/{year}/{month:02d}/{day:02d}/fmi/radar/composite/lowest/
+```text
+<archive root>/{year}/{month:02d}/{day:02d}/fmi/radar/composite/lowest/
     {year}{month:02d}{day:02d}{hour:02d}{minute:02d}_fmi.radar.composite.lowest_FIN_SUOMI1.pgm.gz
 ```
 
@@ -155,13 +156,13 @@ With 6 workers a full build takes about 2 hours.
 Main options:
 
 | Subcommand | Flag | Default | Description |
-|---|---|---|---|
-| all | `--inventory` | `<output dir>/inventory.parquet` | Inventory parquet file. |
+| --- | --- | --- | --- |
+| all | `--inventory` | `OUTPUT_DIR/inventory.parquet` | Inventory parquet file. |
 | `inventory` | `--start`, `--end` | `2008-01-01`, today | Time range to scan, both ends inclusive. |
-| `inventory` | `--root` | `/arch/radar/storage` | Archive root directory. |
+| `inventory` | `--root` | `ARCHIVE_ROOT` in `config.py` | Archive root directory. |
 | `verify`, `populate` | `--workers` | `6` / `4` | Parallel processes. |
 | `verify`, `populate` | `--threads` | `8` | File reader threads per process. |
-| `create`, `populate` | `--store` | `<output dir>/fi-fmi-dbz-5min.zarr` | Output Zarr store. |
+| `create`, `populate` | `--store` | `OUTPUT_DIR/fi-fmi-dbz-5min.zarr` | Output Zarr store. |
 | `create` | `--start`, `--end` | full inventory | Time range of the store, both ends inclusive. |
 | `create` | `--shard-size` | `2016` | Timesteps per shard. |
 | `create` | `--clevel` | `9` | zstd compression level. |
@@ -211,7 +212,7 @@ Codecs were compared on 360 timesteps sampled across all months of 2010,
 single-threaded timings per timestep:
 
 | Codec | Ratio | Encode ms | Decode ms | Full archive |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | zstd 3 | 9.16 | 1.8 | 0.36 | 197 GB |
 | **zstd 9 (used)** | **9.48** | **6.5** | **0.35** | **191 GB** |
 | zstd 19 | 9.96 | 107 | 0.39 | 182 GB |
