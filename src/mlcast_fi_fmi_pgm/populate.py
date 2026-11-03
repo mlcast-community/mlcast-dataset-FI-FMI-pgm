@@ -3,6 +3,10 @@
 Each shard is written in full by exactly one process, so no locking is needed
 and partial-shard read-modify-write never happens. Finished shards are
 recorded as marker files, which makes the run restartable.
+
+Before reading and again before writing each shard, free space on the output
+filesystem is checked. Below the threshold the shard is skipped (nothing
+written, no marker) and the run ends with DiskSpaceError; rerun to resume.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing as mp
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -35,6 +40,24 @@ def failures_path(store: str | Path) -> Path:
     return store.with_name(store.name + ".failures.csv")
 
 
+class DiskSpaceError(RuntimeError):
+    """Free space on the output filesystem is below the safety threshold."""
+
+
+def default_min_free(store: str | Path) -> int:
+    """max(MIN_FREE_BYTES, MIN_FREE_FRACTION of the filesystem size)."""
+    total = shutil.disk_usage(Path(store).parent).total
+    return max(config.MIN_FREE_BYTES, int(config.MIN_FREE_FRACTION * total))
+
+
+def check_free_space(store: str | Path, min_free: int) -> None:
+    free = shutil.disk_usage(Path(store).parent).free
+    if free < min_free:
+        raise DiskSpaceError(
+            f"only {free / 1e9:.0f} GB free next to {store}, need at least {min_free / 1e9:.0f} GB"
+        )
+
+
 def _read_one(item: tuple[pd.Timestamp, str]) -> tuple[np.ndarray | None, str | None]:
     t, path = item
     try:
@@ -48,8 +71,12 @@ def _read_one(item: tuple[pd.Timestamp, str]) -> tuple[np.ndarray | None, str | 
 
 
 def _write_shard(args: tuple) -> dict:
-    store, var_name, k, i0, i1, items, threads = args
+    store, var_name, k, i0, i1, items, threads, min_free = args
     t_start = time.monotonic()
+    try:
+        check_free_space(store, min_free)
+    except DiskSpaceError as err:
+        return {"shard": k, "aborted": str(err)}
     ny, nx = config.HEIGHT, config.WIDTH
     block = np.full((i1 - i0, ny, nx), config.NODATA, dtype=np.uint8)
     failures = []
@@ -60,6 +87,10 @@ def _write_shard(args: tuple) -> dict:
             else:
                 failures.append({"time": str(items[j][0]), "path": items[j][1], "error": err})
 
+    try:
+        check_free_space(store, min_free)
+    except DiskSpaceError as err:
+        return {"shard": k, "aborted": str(err)}
     arr = zarr.open_array(store, path=var_name, mode="r+")
     arr[i0:i1] = block
 
@@ -82,9 +113,18 @@ def populate_store(
     threads: int = 8,
     redo: bool = False,
     shards: list[int] | None = None,
+    min_free: int | None = None,
 ) -> pd.DataFrame:
-    """Write all (or selected) shards. Returns a table of unreadable files."""
+    """Write all (or selected) shards. Returns a table of unreadable files.
+
+    Raises DiskSpaceError (after in-flight shards finish) if free space drops
+    below ``min_free`` bytes (default: ``default_min_free(store)``).
+    """
     store = Path(store)
+    if min_free is None:
+        min_free = default_min_free(store)
+    check_free_space(store, min_free)
+    log.info("Free-space guard: stop if below %.0f GB", min_free / 1e9)
     arr = zarr.open_array(store, path=var_name, mode="r")
     nt = arr.shape[0]
     shard_t = arr.shards[0] if arr.shards else arr.chunks[0]
@@ -104,14 +144,20 @@ def populate_store(
             continue
         i0, i1 = k * shard_t, min((k + 1) * shard_t, nt)
         items = list(zip(times[i0:i1], paths[i0:i1], strict=True))
-        todo.append((str(store), var_name, k, i0, i1, items, threads))
+        todo.append((str(store), var_name, k, i0, i1, items, threads, min_free))
 
     log.info("%d of %d shards to write (%d timesteps each)", len(todo), n_shards, shard_t)
     t0 = time.monotonic()
+    aborted: list[dict] = []
     if todo:
         ctx = mp.get_context("spawn")
         with ctx.Pool(workers) as pool:
             for n, res in enumerate(pool.imap_unordered(_write_shard, todo), 1):
+                if "aborted" in res:
+                    if not aborted:
+                        log.error("Stopping: %s", res["aborted"])
+                    aborted.append(res)
+                    continue
                 elapsed = time.monotonic() - t0
                 eta = elapsed / n * (len(todo) - n)
                 log.info(
@@ -131,4 +177,9 @@ def populate_store(
     df.to_csv(failures_path(store), index=False)
     if len(df):
         log.warning("%d unreadable files written as fill; see %s", len(df), failures_path(store))
+    if aborted:
+        raise DiskSpaceError(
+            f"{len(aborted)} shards skipped for lack of disk space: {aborted[0]['aborted']}. "
+            "Free space and rerun the same command to resume."
+        )
     return df

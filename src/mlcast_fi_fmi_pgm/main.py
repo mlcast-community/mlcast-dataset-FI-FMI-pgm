@@ -11,7 +11,7 @@ import pandas as pd
 from . import config
 from .create import create_store
 from .inventory import build_time_axis, scan_archive, summarize
-from .populate import populate_store
+from .populate import DiskSpaceError, populate_store
 from .verify import bad_files_path, verify_files
 
 log = logging.getLogger("mlcast_fi_fmi_pgm")
@@ -87,6 +87,7 @@ def cmd_populate(args: argparse.Namespace) -> None:
         threads=args.threads,
         redo=args.redo,
         shards=args.shards,
+        min_free=None if args.min_free_gb is None else int(args.min_free_gb * 1e9),
     )
 
 
@@ -136,6 +137,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--threads", type=int, default=8, help="file reader threads per process")
     sp.add_argument("--redo", action="store_true", help="rewrite shards already marked done")
     sp.add_argument("--shards", type=int, nargs="*", default=None, help="only these shards")
+    sp.add_argument(
+        "--min-free-gb",
+        type=float,
+        default=None,
+        help="stop before writing if free space would drop below this "
+        "(default: max(500 GB, 10%% of the filesystem))",
+    )
     sp.set_defaults(func=cmd_populate)
     return p
 
@@ -146,7 +154,11 @@ def main(argv: list[str] | None = None) -> None:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    args.func(args)
+    try:
+        args.func(args)
+    except DiskSpaceError as err:
+        log.error("%s", err)
+        raise SystemExit(2) from err
 
 
 if __name__ == "__main__":

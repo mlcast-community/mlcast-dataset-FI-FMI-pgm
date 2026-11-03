@@ -49,3 +49,8 @@ VALIDATOR_VERSION = "0.4.0"
 REPO_URL = "https://github.com/mlcast-community/mlcast-dataset-FI-FMI-pgm"
 LICENSE = "CC-BY-4.0"
 CREATED_BY = "Jussi Tiira <jussi.tiira@fmi.fi>"
+
+# populate stops before writing a shard if free space on the output
+# filesystem would be below max(MIN_FREE_BYTES, MIN_FREE_FRACTION * size).
+MIN_FREE_BYTES = 500 * 10**9
+MIN_FREE_FRACTION = 0.10

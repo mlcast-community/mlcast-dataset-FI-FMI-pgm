@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 
 from mlcast_fi_fmi_pgm import config
 from mlcast_fi_fmi_pgm.create import create_store
@@ -89,7 +90,8 @@ def test_end_to_end(tmp_path):
 
     store = tmp_path / "out.zarr"
     create_store(store, axis, shard_size=2)
-    failures = populate_store(store, workers=1, threads=2)
+    assert zarr.open_array(store, path="dbz").fill_value == config.NODATA
+    failures = populate_store(store, workers=1, threads=2, min_free=0)
     assert len(failures) == 1
 
     ds = xr.open_zarr(store)
@@ -106,7 +108,7 @@ def test_end_to_end(tmp_path):
     assert np.isnan(ds["dbz"].isel(time=1).values).all()
 
     # restart: nothing left to do
-    assert len(populate_store(store, workers=1, threads=2)) == 1
+    assert len(populate_store(store, workers=1, threads=2, min_free=0)) == 1
 
 
 def test_filename_pattern():
@@ -144,3 +146,24 @@ def test_damaged_files_raise_pgmerror(tmp_path, damage):
     path.write_bytes(bad)
     with pytest.raises(PGMError):
         read_pgm(path)
+
+
+def test_populate_stops_on_low_disk_space(tmp_path):
+    from mlcast_fi_fmi_pgm.populate import DiskSpaceError, default_min_free, progress_dir
+
+    t = pd.Timestamp("2024-06-01 12:00")
+    path = _copy_with_time(t, tmp_path)
+    inv = pd.DataFrame({"time": [t], "path": [str(path)], "size": 1})
+    inv["time"] = inv["time"].astype("datetime64[ns]")
+    store = tmp_path / "out.zarr"
+    create_store(store, build_time_axis(inv), shard_size=1)
+
+    assert default_min_free(store) >= config.MIN_FREE_BYTES
+    impossible = 10**18  # 1 EB
+    with pytest.raises(DiskSpaceError):
+        populate_store(store, workers=1, threads=1, min_free=impossible)
+    assert not list(progress_dir(store).glob("*.done"))  # nothing marked done
+    assert np.isnan(xr.open_zarr(store)["dbz"].values).all()  # nothing written
+
+    populate_store(store, workers=1, threads=1, min_free=0)  # resumes normally
+    assert len(list(progress_dir(store).glob("*.done"))) == 1

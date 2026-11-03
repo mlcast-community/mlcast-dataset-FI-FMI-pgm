@@ -156,6 +156,10 @@ Key requirements that shape the design (read the spec in the validator's
   that warning is harmless.
 - The validator treats any gap as a variable timestep, so the global attr
   `consistent_timestep_start` is always set (to the first timestep).
+- The Zarr array `fill_value` must be 255 (set via the `fill_value`
+  encoding key). xarray writes `_FillValue` only as an attribute, and the
+  Zarr v3 default `fill_value` of 0 makes unwritten chunks decode as
+  -32 dBZ ("no echo") instead of NaN. Tested in `test_end_to_end`.
 - Data must decode to float. We store uint8 with `scale_factor=0.5`,
   `add_offset=-32`, `_FillValue=255`; xarray decodes to float64 (Zarr v3
   JSON attrs lose the float32 type), which the spec allows.
@@ -175,6 +179,11 @@ Key requirements that shape the design (read the spec in the validator's
   under `/tutka/code/dev` lacks `_bz2`, which numcodecs needs.
 - The dataset license differs from the code license (repo `LICENSE` is for
   code only).
+- `/tutka/data` is shared nowcast storage and must never fill up.
+  `populate` checks free space before reading and before writing each
+  shard and stops (exit code 2, nothing partially written) below
+  max(500 GB, 10 % of the filesystem); `--min-free-gb` overrides. Rerun to
+  resume. Tests pass `min_free=0` because `/tmp` is small.
 - Never modify or write anything under `/arch/radar/storage`; it is the
   operational archive. Read-only.
 - Write outputs and temporary files outside the repo (or to gitignored

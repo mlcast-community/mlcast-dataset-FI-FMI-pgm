@@ -152,6 +152,10 @@ def create_store(
             "scale_factor": config.GAIN,
             "add_offset": config.OFFSET,
             "_FillValue": config.NODATA,
+            # Zarr v3: the array's own fill_value is separate from the CF
+            # _FillValue attribute and defaults to 0 (= -32 dBZ, "no echo").
+            # It must be NODATA so unwritten chunks read as NaN, not dry weather.
+            "fill_value": config.NODATA,
             "chunks": (1, grid.height, grid.width),
             "shards": (shard_t, grid.height, grid.width),
             # Plain zstd: on uint8 radar data it beats Blosc+bitshuffle in both
