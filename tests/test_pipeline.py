@@ -1,0 +1,146 @@
+import gzip
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
+
+from mlcast_fi_fmi_pgm import config
+from mlcast_fi_fmi_pgm.create import create_store
+from mlcast_fi_fmi_pgm.grid import Grid
+from mlcast_fi_fmi_pgm.inventory import build_time_axis
+from mlcast_fi_fmi_pgm.pgm import PGMError, check_header, read_pgm
+from mlcast_fi_fmi_pgm.populate import populate_store
+
+DATA = Path(__file__).parent / "data"
+SAMPLE = DATA / "202406011200_fmi.radar.composite.lowest_FIN_SUOMI1.pgm.gz"
+SAMPLE_TIME = pd.Timestamp("2024-06-01 12:00")
+
+
+def test_read_sample():
+    header, data = read_pgm(SAMPLE)
+    assert data.shape == (config.HEIGHT, config.WIDTH)
+    assert data.dtype == np.uint8
+    assert header.obstime == SAMPLE_TIME
+    assert header.meta["param"] == "CorrectedReflectivity"
+    assert len(header.radars) == 11
+    check_header(header, SAMPLE_TIME)
+    with pytest.raises(PGMError):
+        check_header(header, SAMPLE_TIME + pd.Timedelta("5min"))
+
+
+def test_grid_geometry():
+    g = Grid()
+    assert g.dx == pytest.approx(999.674053, abs=1e-3)
+    assert g.dy == pytest.approx(999.62859, abs=1e-3)
+    assert g.geotransform[0] == pytest.approx(0, abs=0.1)
+    assert g.y[0] > g.y[-1]  # north-up
+    lat, lon = g.latlon()
+    assert lat.shape == (config.HEIGHT, config.WIDTH)
+    assert 68.5 < lat[0].max() < 70.5 and 57.5 < lat[-1].min() < 58.5
+
+
+def test_time_axis():
+    t = pd.to_datetime(
+        [
+            "2024-01-01 00:00",
+            "2024-01-01 00:05",
+            "2024-01-01 00:05",
+            "2024-01-01 00:12",
+            "2024-01-01 00:20",
+            "2024-01-01 00:25",
+        ]
+    ).astype("datetime64[ns]")
+    inv = pd.DataFrame({"time": t, "path": list("abcdef"), "size": [1, 1, 1, 1, 0, 1]})
+    axis = build_time_axis(inv)
+    assert list(axis.files["path"]) == ["a", "b", "f"]
+    missing = pd.DatetimeIndex(axis.missing_times).strftime("%H:%M")
+    assert list(missing) == ["00:10", "00:15", "00:20"]
+    assert sorted(axis.dropped["reason"]) == [
+        "duplicate timestamp",
+        "empty or unreadable file",
+        "off timestep grid",
+    ]
+
+
+def _copy_with_time(t: pd.Timestamp, dest: Path) -> Path:
+    raw = (
+        gzip.open(SAMPLE)
+        .read()
+        .replace(
+            b"# obstime " + SAMPLE_TIME.strftime("%Y%m%d%H%M").encode(),
+            b"# obstime " + t.strftime("%Y%m%d%H%M").encode(),
+        )
+    )
+    path = dest / config.FILENAME_TEMPLATE.format(
+        year=t.year, month=t.month, day=t.day, hour=t.hour, minute=t.minute
+    )
+    path.write_bytes(gzip.compress(raw))
+    return path
+
+
+def test_end_to_end(tmp_path):
+    times = pd.to_datetime(["2024-06-01 12:00", "2024-06-01 12:05", "2024-06-01 12:15"])
+    paths = [_copy_with_time(t, tmp_path) for t in times]
+    paths[1].write_bytes(b"garbage")  # unreadable file → fill, reported
+    inv = pd.DataFrame({"time": times.astype("datetime64[ns]"), "path": map(str, paths), "size": 1})
+    axis = build_time_axis(inv)
+
+    store = tmp_path / "out.zarr"
+    create_store(store, axis, shard_size=2)
+    failures = populate_store(store, workers=1, threads=2)
+    assert len(failures) == 1
+
+    ds = xr.open_zarr(store)
+    # JSON attrs make scale_factor float64, so xarray decodes to float64 (allowed by spec)
+    assert np.issubdtype(ds["dbz"].dtype, np.floating)
+    assert ds["dbz"].encoding["dtype"] == np.uint8
+    assert list(ds["missing_times"].dt.strftime("%H:%M").values) == ["12:10"]
+    assert ds["dbz"].encoding["chunks"] == (1, config.HEIGHT, config.WIDTH)
+
+    _, raw = read_pgm(SAMPLE)
+    expected = np.where(raw == 255, np.nan, raw * 0.5 - 32)
+    np.testing.assert_array_equal(ds["dbz"].isel(time=0).values, expected)
+    np.testing.assert_array_equal(ds["dbz"].isel(time=2).values, expected)
+    assert np.isnan(ds["dbz"].isel(time=1).values).all()
+
+    # restart: nothing left to do
+    assert len(populate_store(store, workers=1, threads=2)) == 1
+
+
+def test_filename_pattern():
+    base = "202301011200_fmi.radar.composite.lowest_FIN_SUOMI1"
+    assert config.FILENAME_RE.match(base + ".pgm.gz").group(1) == "202301011200"
+    assert config.FILENAME_RE.match(base + ".pgm")
+    for other in (base + ".png", base.replace("SUOMI1", "SUOMI1BIG") + ".pgm"):
+        assert not config.FILENAME_RE.match(other)
+
+
+def test_time_axis_bad_paths():
+    t = pd.to_datetime(["2024-01-01 00:00", "2024-01-01 00:05", "2024-01-01 00:05"])
+    inv = pd.DataFrame({"time": t.astype("datetime64[ns]"), "path": ["a", "b1", "b2"], "size": 1})
+    axis = build_time_axis(inv, bad_paths={"b1"})  # good duplicate replaces the bad one
+    assert list(axis.files["path"]) == ["a", "b2"]
+    axis = build_time_axis(inv, bad_paths={"b1", "b2"})  # no usable copy → missing
+    assert list(axis.files["path"]) == ["a"]
+    assert len(axis.missing_times) == 0  # trailing gap is outside the series
+    axis = build_time_axis(
+        pd.concat([inv, inv.iloc[:1].assign(time=pd.Timestamp("2024-01-01 00:10"), path="c")]),
+        bad_paths={"b1", "b2"},
+    )
+    assert list(pd.DatetimeIndex(axis.missing_times).strftime("%H:%M")) == ["00:05"]
+
+
+@pytest.mark.parametrize("damage", ["zeros", "corrupt_stream", "truncated"])
+def test_damaged_files_raise_pgmerror(tmp_path, damage):
+    good = SAMPLE.read_bytes()
+    bad = {
+        "zeros": b"\0" * 1000,
+        "corrupt_stream": good[:20] + bytes(b ^ 0xFF for b in good[20:2000]) + good[2000:],
+        "truncated": good[: len(good) // 2],
+    }[damage]
+    path = tmp_path / SAMPLE.name
+    path.write_bytes(bad)
+    with pytest.raises(PGMError):
+        read_pgm(path)
