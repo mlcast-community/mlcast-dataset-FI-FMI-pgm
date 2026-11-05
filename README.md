@@ -223,9 +223,10 @@ uv run mlcast.validate_dataset source_data radar_precipitation <store>
 ```
 
 The validator's GDAL checks need GDAL's Python bindings (`osgeo`), which are
-not installed by `uv sync`. Run the validator additionally in an environment
-that has `gdal`, `rioxarray`, `zarr` and `mlcast-dataset-validator` installed
-(e.g. from conda-forge) to cover them.
+not installed by `uv sync`, so the command above skips them. For a complete
+validation, run the validator in an environment that has `gdal`, `cartopy`,
+`rioxarray`, `zarr` and `mlcast-dataset-validator` installed (e.g. from
+conda-forge). The published dataset was validated that way with 0 failures.
 
 Expected warnings:
 

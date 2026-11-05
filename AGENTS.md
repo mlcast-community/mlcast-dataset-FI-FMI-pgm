@@ -139,14 +139,18 @@ uv run fmi-pgm-zarr radars --workers 6 --threads 16   # any time after create
 uv run mlcast.validate_dataset source_data radar_precipitation <store>
 ```
 
-Validation needs two environments to cover all checks:
+Run the full validation (GDAL and cartopy checks included) in the shared
+conda env `/tutka/code/dev/miniforge3/envs/jupyter` (GDAL 3.13 + `osgeo`
+bindings, cartopy, rioxarray, zarr, validator 0.4.0) and save the report next
+to the store:
 
-- the uv env (above) runs everything except GDAL (system GDAL 3.0.4 is too
-  old to build Python 3.12 bindings), including the cartopy checks;
-- `/tutka/code/dev/miniforge3/envs/jupyter` (shared conda env; GDAL 3.13 +
-  `osgeo` bindings, rioxarray, zarr, validator 0.4.0 installed; no cartopy)
-  runs the GDAL checks:
-  `/tutka/code/dev/miniforge3/envs/jupyter/bin/mlcast.validate_dataset source_data radar_precipitation <store>`
+```bash
+/tutka/code/dev/miniforge3/envs/jupyter/bin/mlcast.validate_dataset \
+    source_data radar_precipitation <store> > <store>.validation.txt 2>&1
+```
+
+The uv env skips the GDAL checks (system GDAL 3.0.4 is too old to build
+Python 3.12 bindings); it is fine for quick checks.
 
 Don't install further packages into that shared env without asking.
 
