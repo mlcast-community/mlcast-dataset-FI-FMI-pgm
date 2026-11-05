@@ -43,6 +43,7 @@ OUTPUT_DIR = "/tutka/data/storage/mlcast-dataset-fi-fmi-pgm"
 VARIABLE_NAME = "dbz"
 SHARD_SIZE = 2016  # timesteps per shard (one week at 5 min)
 CLEVEL = 9  # zstd level
+RADAR_CHUNK = 105120  # timesteps per chunk of radar_status (one year at 5 min)
 
 DATASET_VERSION = "0.1.0"
 VALIDATOR_VERSION = "0.4.0"

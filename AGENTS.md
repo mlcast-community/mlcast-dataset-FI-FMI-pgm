@@ -73,6 +73,14 @@ Parse the header properly (comment lines can vary over the years, e.g. the
 radar list changes). Don't hard-code a byte offset; read the last
 `760*1226` bytes only after checking the dimensions and maxval.
 
+Radar lines are `# radar <code> <flag> <lon> <lat>`. Flag 1 = contributed,
+flag 0 = in the network but not contributing (verified: on flag-0 files that
+radar's own coverage area turns into nodata and nothing else changes; with
+flag 1 in both files of a pair nothing is lost). Unlisted radars are not part
+of the network at that time. The list changes over the years (8–12 radars
+per file, 15 codes in total), and VAN has a second position for two weeks in
+January 2009 (the coordinates KER uses later that year).
+
 Pixel values (observed on a 2024 sample):
 - `255` – nodata / outside radar coverage
 - `0` – no echo / lowest class
@@ -108,10 +116,14 @@ Package `src/mlcast_fi_fmi_pgm/` (hatchling build, CLI `fmi-pgm-zarr`):
 - `populate.py` – writes data one shard per task (process pool, reader
   threads inside); restartable via `<store>.progress/shard_*.done` markers;
   unreadable files are written as fill and listed in `<store>.failures.csv`.
+- `radars.py` – reads only the header of every source file (radar lists) into
+  `<store>.radars.parquet` and appends `radar_status(time, radar)` with
+  `radar`, `radar_lon`, `radar_lat` to the store; `--rescan` to reread.
 - `verify.py` – reads every inventoried file once; writes
   `inventory.bad.csv` (time, path, error). `create` refuses to run without
   it unless `--allow-unverified`.
-- `main.py` – CLI: `inventory`, `verify`, `create`, `populate` subcommands.
+- `main.py` – CLI: `inventory`, `verify`, `create`, `populate`, `radars`
+  subcommands.
 - `tests/` – pytest, with one sample `.pgm.gz` in `tests/data/`.
 
 Pipeline (defaults write to `/tutka/data/storage/mlcast-dataset-fi-fmi-pgm/`):
@@ -121,6 +133,7 @@ uv run fmi-pgm-zarr inventory --start 2008-01-01 --end 2026-11-02
 uv run fmi-pgm-zarr verify --workers 6 --threads 8
 uv run fmi-pgm-zarr create            # --start/--end to subset, --overwrite
 uv run fmi-pgm-zarr populate --workers 6 --threads 8
+uv run fmi-pgm-zarr radars --workers 6 --threads 16   # any time after create
 uv run mlcast.validate_dataset source_data radar_precipitation <store>
 ```
 
@@ -167,6 +180,12 @@ Key requirements that shape the design (read the spec in the validator's
   `units=dBZ`, `grid_mapping=spatial_ref`.
 - `spatial_ref` carries CF grid-mapping attrs plus `crs_wkt`/`spatial_ref`
   WKT with BBOX. 2D `lat`/`lon` coordinates are required.
+- The validator applies its data-variable rules (dims `(time, y, x)`, float
+  dtype, `standard_name`, `grid_mapping`, 1-per-timestep chunks) to **every**
+  data variable. Auxiliary per-timestep information such as `radar_status`
+  must therefore be a (non-index) coordinate, not a data variable.
+  Appending with xarray `mode="a"` replaces the group attributes, so
+  `radars.py` passes the existing ones through (tested in `test_radar_status`).
 - Global attrs: SPDX `license`, `mlcast_created_on/by/with`,
   `mlcast_dataset_version`, `mlcast_dataset_validator_version`,
   `mlcast_dataset_identifier` (`FI-FMI-dbz`). `mlcast_created_with` must

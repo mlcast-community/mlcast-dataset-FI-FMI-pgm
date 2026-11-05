@@ -32,16 +32,18 @@ The dataset follows the MLCast `source_data/radar_precipitation` specification
 - **Dimensions:** `dbz(time, y, x)`. `y` runs north to south.
 - **Coordinates:** projected `x`/`y` (pixel centres, in metres), 2D `lat`/`lon`, and `spatial_ref`, which carries the CF grid-mapping attributes and a WKT with a bounding box.
 - **Time:** `time` contains only timesteps with data. Missing 5-minute timesteps are listed in `missing_times`.
+- **Radar network:** the coordinate `radar_status(time, radar)` tells which radars contributed to each timestep: 1 = contributed, 0 = part of the network but not contributing (e.g. during maintenance), −1 = not listed. `radar_lon`/`radar_lat` give the radar positions.
 - **Storage:** values are stored as `uint8` with CF packing: `dBZ = 0.5 * value - 32`, and 255 means outside radar coverage (decoded as NaN). xarray decodes them to floating-point dBZ. Raw value 0 (−32 dBZ) means no detected echo.
 
 ## Project overview
 
-The workflow in this repository consists of four main steps:
+The workflow in this repository consists of five main steps:
 
 1. **Build an inventory parquet file**
 2. **Verify every source file**
 3. **Create an empty Zarr dataset**
 4. **Populate the Zarr dataset with data from the source PGM files**
+5. **Add the radar network status from the file headers**
 
 The final dataset is stored in **Zarr v3** format.
 
@@ -110,6 +112,28 @@ each shard, the remaining free disk space is checked. If it would drop below
 max(500 GB, 10 % of the filesystem), the run stops cleanly, without writing
 partial data.
 
+### 5. Add the radar network status
+
+Every PGM header lists the radars of the composite, one line each:
+`# radar <code> <flag> <lon> <lat>`. This step reads only the headers (the
+first few KB of each file), saves them to `<store>.radars.parquet`, and adds
+`radar_status(time, radar)`, `radar_lon` and `radar_lat` to the store
+without touching the reflectivity data. It can run any time after step 3.
+
+The flag was checked against the data: when a radar has flag 0, its own
+coverage area turns into nodata compared with a neighbouring timestep where
+it has flag 1, and nothing else changes. Between files where every radar has
+the same status, no coverage is lost anywhere.
+
+`radar_status` is stored as a coordinate rather than a data variable,
+because the MLCast specification expects every data variable to be a
+gridded `(time, y, x)` field.
+
+```python
+(ds.radar_status == 1).sum("radar")      # number of contributing radars per timestep
+ds.radar_status.sel(radar="KOR")         # history of one radar
+```
+
 ## Repository structure
 
 The Python package is located in `src/mlcast_fi_fmi_pgm/`:
@@ -121,6 +145,7 @@ The Python package is located in `src/mlcast_fi_fmi_pgm/`:
 - `verify.py`: reads every file once and lists the unusable ones
 - `create.py`: creates the empty Zarr v3 dataset
 - `populate.py`: writes the data, one shard per task
+- `radars.py`: reads the radar lists from the file headers and adds `radar_status`
 - `main.py`: command-line entry point (`fmi-pgm-zarr`)
 
 Other files:
@@ -149,6 +174,7 @@ uv run fmi-pgm-zarr inventory --start 2008-01-01 --end 2026-11-02
 uv run fmi-pgm-zarr verify
 uv run fmi-pgm-zarr create
 uv run fmi-pgm-zarr populate --workers 6 --threads 8
+uv run fmi-pgm-zarr radars --workers 6 --threads 16
 ```
 
 With 6 workers a full build takes about 2 hours.
@@ -160,9 +186,9 @@ Main options:
 | all | `--inventory` | `OUTPUT_DIR/inventory.parquet` | Inventory parquet file. |
 | `inventory` | `--start`, `--end` | `2008-01-01`, today | Time range to scan, both ends inclusive. |
 | `inventory` | `--root` | `ARCHIVE_ROOT` in `config.py` | Archive root directory. |
-| `verify`, `populate` | `--workers` | `6` / `4` | Parallel processes. |
-| `verify`, `populate` | `--threads` | `8` | File reader threads per process. |
-| `create`, `populate` | `--store` | `OUTPUT_DIR/fi-fmi-dbz-5min.zarr` | Output Zarr store. |
+| `verify`, `populate`, `radars` | `--workers` | `6` / `4` / `6` | Parallel processes. |
+| `verify`, `populate`, `radars` | `--threads` | `8` | File reader threads per process. |
+| `create`, `populate`, `radars` | `--store` | `OUTPUT_DIR/fi-fmi-dbz-5min.zarr` | Output Zarr store. |
 | `create` | `--start`, `--end` | full inventory | Time range of the store, both ends inclusive. |
 | `create` | `--shard-size` | `2016` | Timesteps per shard. |
 | `create` | `--clevel` | `9` | zstd compression level. |
@@ -171,6 +197,7 @@ Main options:
 | `create` | `--allow-unverified` | off | Create the store without running `verify` first (not recommended). |
 | `populate` | `--redo` | off | Rewrite shards that are already marked done. |
 | `populate` | `--shards` | all | Write only the listed shard indices. |
+| `radars` | `--rescan` | off | Reread the headers even if `<store>.radars.parquet` exists. |
 | `populate` | `--min-free-gb` | max(500 GB, 10 % of filesystem) | Free-space threshold below which the run stops. |
 
 Run `uv run fmi-pgm-zarr <subcommand> --help` for the full, up-to-date list.

@@ -11,8 +11,9 @@ from mlcast_fi_fmi_pgm import config
 from mlcast_fi_fmi_pgm.create import create_store
 from mlcast_fi_fmi_pgm.grid import Grid
 from mlcast_fi_fmi_pgm.inventory import build_time_axis
-from mlcast_fi_fmi_pgm.pgm import PGMError, check_header, read_pgm
+from mlcast_fi_fmi_pgm.pgm import PGMError, check_header, read_pgm, read_pgm_header
 from mlcast_fi_fmi_pgm.populate import populate_store
+from mlcast_fi_fmi_pgm.radars import add_radars, parse_radar_lines
 
 DATA = Path(__file__).parent / "data"
 SAMPLE = DATA / "202406011200_fmi.radar.composite.lowest_FIN_SUOMI1.pgm.gz"
@@ -65,7 +66,7 @@ def test_time_axis():
     ]
 
 
-def _copy_with_time(t: pd.Timestamp, dest: Path) -> Path:
+def _copy_with_time(t: pd.Timestamp, dest: Path, replace: dict[bytes, bytes] | None = None) -> Path:
     raw = (
         gzip.open(SAMPLE)
         .read()
@@ -74,6 +75,9 @@ def _copy_with_time(t: pd.Timestamp, dest: Path) -> Path:
             b"# obstime " + t.strftime("%Y%m%d%H%M").encode(),
         )
     )
+    for old, new in (replace or {}).items():
+        assert old in raw
+        raw = raw.replace(old, new)
     path = dest / config.FILENAME_TEMPLATE.format(
         year=t.year, month=t.month, day=t.day, hour=t.hour, minute=t.minute
     )
@@ -167,3 +171,55 @@ def test_populate_stops_on_low_disk_space(tmp_path):
 
     populate_store(store, workers=1, threads=1, min_free=0)  # resumes normally
     assert len(list(progress_dir(store).glob("*.done"))) == 1
+
+
+def test_read_header_only(tmp_path):
+    full, _ = read_pgm(SAMPLE)
+    assert read_pgm_header(SAMPLE) == full
+    assert read_pgm_header(SAMPLE, nbytes=64) == full  # header longer than nbytes
+    plain = tmp_path / SAMPLE.name.removesuffix(".gz")
+    plain.write_bytes(gzip.open(SAMPLE).read())
+    assert read_pgm_header(plain) == full
+    plain.write_bytes(b"P5\n# radar KOR 1 21.6 60.1\n760 1226 2")  # cut inside maxval
+    with pytest.raises(PGMError):
+        read_pgm_header(plain)
+
+
+def test_parse_radar_lines():
+    assert parse_radar_lines(["KOR 1 21.6460 60.1280"]) == [("KOR", 1, 21.646, 60.128)]
+    for bad in ("KOR 1 21.6", "KOR 2 21.6 60.1"):
+        with pytest.raises(PGMError):
+            parse_radar_lines([bad])
+
+
+def test_radar_status(tmp_path):
+    times = pd.to_datetime(["2024-06-01 12:00", "2024-06-01 12:05", "2024-06-01 12:15"])
+    paths = [
+        _copy_with_time(times[0], tmp_path),
+        _copy_with_time(times[1], tmp_path, {b"# radar PET 1 ": b"# radar PET 0 "}),
+        _copy_with_time(times[2], tmp_path, {b"# radar KOR 1 21.6460 60.1280\n": b""}),
+    ]
+    inv = pd.DataFrame({"time": times.astype("datetime64[ns]"), "path": map(str, paths), "size": 1})
+    store = tmp_path / "out.zarr"
+    create_store(store, build_time_axis(inv), shard_size=2)
+    populate_store(store, workers=1, threads=2, min_free=0)
+    before = xr.open_zarr(store)
+    attrs, dbz = dict(before.attrs), before["dbz"].values
+
+    for _ in range(2):  # a rerun replaces the variables
+        add_radars(store, workers=1, threads=2)
+    ds = xr.open_zarr(store)
+    assert list(ds.data_vars) == ["dbz"]  # spec rules apply only to the radar field
+    assert ds.attrs == attrs
+    np.testing.assert_array_equal(ds["dbz"].values, dbz)
+
+    status = ds["radar_status"]
+    assert status.dtype == np.int8
+    assert status.sizes == {"time": 3, "radar": 11}
+    assert list(ds["radar"].values) == sorted(ds["radar"].values)
+    assert status.sel(radar="KOR").values.tolist() == [1, 1, -1]
+    assert status.sel(radar="PET").values.tolist() == [1, 0, 1]
+    assert (status.sel(radar="ANJ") == 1).all()
+    assert float(ds["radar_lon"].sel(radar="KOR")) == pytest.approx(21.646)
+    assert float(ds["radar_lat"].sel(radar="KOR")) == pytest.approx(60.128)
+    assert zarr.open_array(store, path="radar_status").fill_value == -1

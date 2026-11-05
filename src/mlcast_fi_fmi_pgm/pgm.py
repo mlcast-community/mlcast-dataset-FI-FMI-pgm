@@ -38,7 +38,8 @@ class PGMHeader:
         return lon, lat
 
 
-def _parse(raw: bytes) -> tuple[PGMHeader, np.ndarray]:
+def _parse_header(raw: bytes) -> tuple[PGMHeader, int]:
+    """Parse the header; return it and the byte offset where the raster starts."""
     if raw[:2] != b"P5":
         raise PGMError(f"not a binary PGM (magic {raw[:2]!r})")
 
@@ -65,6 +66,8 @@ def _parse(raw: bytes) -> tuple[PGMHeader, np.ndarray]:
             numbers.append(int(raw[start:pos]))
         except ValueError as err:
             raise PGMError(f"bad header token {raw[start:pos]!r}") from err
+    if pos >= n:  # the last number may be cut off
+        raise PGMError("truncated header")
     pos += 1  # exactly one whitespace character separates header and raster
 
     width, height, maxval = numbers
@@ -79,12 +82,40 @@ def _parse(raw: bytes) -> tuple[PGMHeader, np.ndarray]:
             radars.append(value.strip())
         elif key and key != "}":
             meta[key] = value.strip()
+    return PGMHeader(width, height, maxval, meta, radars), pos
 
+
+def _parse(raw: bytes) -> tuple[PGMHeader, np.ndarray]:
+    header, pos = _parse_header(raw)
+    width, height = header.width, header.height
     data = np.frombuffer(raw, dtype=np.uint8, count=width * height, offset=pos)
     if len(raw) - pos != width * height:
         raise PGMError(f"raster size {len(raw) - pos} != {width}x{height}")
-    header = PGMHeader(width, height, maxval, meta, radars)
     return header, data.reshape(height, width)
+
+
+def _read_bytes(path: Path, size: int = -1) -> bytes:
+    opener = gzip.open if path.suffix == ".gz" else open
+    try:
+        with opener(path, "rb") as fh:
+            return fh.read(size)
+    except (OSError, EOFError, zlib.error) as err:
+        raise PGMError(f"cannot read {path}: {err}") from err
+
+
+def read_pgm_header(path: str | Path, nbytes: int = 8192) -> PGMHeader:
+    """Read only the header (decompresses just the first ``nbytes``).
+
+    Falls back to reading the whole file if the header is longer than that.
+    """
+    path = Path(path)
+    raw = _read_bytes(path, nbytes)
+    try:
+        return _parse_header(raw)[0]
+    except PGMError:
+        if len(raw) < nbytes:
+            raise
+        return _parse_header(_read_bytes(path))[0]
 
 
 def read_pgm(path: str | Path) -> tuple[PGMHeader, np.ndarray]:
@@ -92,14 +123,7 @@ def read_pgm(path: str | Path) -> tuple[PGMHeader, np.ndarray]:
 
     Row 0 of the raster is the northern edge of the grid.
     """
-    path = Path(path)
-    opener = gzip.open if path.suffix == ".gz" else open
-    try:
-        with opener(path, "rb") as fh:
-            raw = fh.read()
-    except (OSError, EOFError, zlib.error) as err:
-        raise PGMError(f"cannot read {path}: {err}") from err
-    return _parse(raw)
+    return _parse(_read_bytes(Path(path)))
 
 
 def check_header(header: PGMHeader, expected_time: pd.Timestamp | None = None) -> None:

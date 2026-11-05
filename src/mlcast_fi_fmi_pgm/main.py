@@ -1,4 +1,4 @@
-"""Command line entry point: inventory → verify → create → populate."""
+"""Command line entry point: inventory → verify → create → populate → radars."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from pathlib import Path
 import pandas as pd
 
 from . import config
-from .create import create_store
+from .create import create_store, sources_path
 from .inventory import build_time_axis, scan_archive, summarize
 from .populate import DiskSpaceError, populate_store
+from .radars import add_radars, summarize_radars
 from .verify import bad_files_path, verify_files
 
 log = logging.getLogger("mlcast_fi_fmi_pgm")
@@ -91,6 +92,12 @@ def cmd_populate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_radars(args: argparse.Namespace) -> None:
+    ds = add_radars(args.store, workers=args.workers, threads=args.threads, rescan=args.rescan)
+    times = pd.DatetimeIndex(pd.read_parquet(sources_path(args.store))["time"])
+    print(summarize_radars(ds, times))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="fmi-pgm-zarr", description=__doc__)
     p.add_argument("-v", "--verbose", action="store_true")
@@ -145,6 +152,15 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: max(500 GB, 10%% of the filesystem))",
     )
     sp.set_defaults(func=cmd_populate)
+
+    sp = sub.add_parser(
+        "radars", help="add radar_status (which radars contributed) from the file headers"
+    )
+    common(sp)
+    sp.add_argument("--workers", type=int, default=6, help="parallel processes")
+    sp.add_argument("--threads", type=int, default=8, help="header reader threads per process")
+    sp.add_argument("--rescan", action="store_true", help="reread headers even if a scan exists")
+    sp.set_defaults(func=cmd_radars)
     return p
 
 
