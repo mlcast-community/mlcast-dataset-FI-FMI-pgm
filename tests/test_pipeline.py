@@ -95,6 +95,10 @@ def test_end_to_end(tmp_path):
     store = tmp_path / "out.zarr"
     create_store(store, axis, shard_size=2)
     assert zarr.open_array(store, path="dbz").fill_value == config.NODATA
+    attrs = xr.open_zarr(store).attrs
+    assert attrs["mlcast_created_by"] == config.CREATED_BY
+    assert attrs["creator_name"] == "Jussi Tiira, Joonas Karjalainen, Jenna Ritvanen"
+    assert attrs["creator_email"].count("@fmi.fi") == 3
     failures = populate_store(store, workers=1, threads=2, min_free=0)
     assert len(failures) == 1
 
@@ -183,6 +187,16 @@ def test_read_header_only(tmp_path):
     plain.write_bytes(b"P5\n# radar KOR 1 21.6 60.1\n760 1226 2")  # cut inside maxval
     with pytest.raises(PGMError):
         read_pgm_header(plain)
+
+
+def test_creator_attrs():
+    from mlcast_fi_fmi_pgm.create import creator_attrs
+
+    a = creator_attrs(["A B <a@x.org>", " C <c@y.org> "])
+    assert a["creator_name"] == "A B, C" and a["creator_email"] == "a@x.org, c@y.org"
+    for bad in ("A B", "A <a b@x.org>", "A <a@x.org>, B <b@y.org>"):
+        with pytest.raises(ValueError):
+            creator_attrs([bad])
 
 
 def test_parse_radar_lines():

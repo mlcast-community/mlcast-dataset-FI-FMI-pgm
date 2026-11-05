@@ -49,7 +49,15 @@ DATASET_VERSION = "0.1.0"
 VALIDATOR_VERSION = "0.4.0"
 REPO_URL = "https://github.com/mlcast-community/mlcast-dataset-FI-FMI-pgm"
 LICENSE = "CC-BY-4.0"
+# Single contact: validator 0.4.0 accepts only one "Name <email>" here.
 CREATED_BY = "Jussi Tiira <jussi.tiira@fmi.fi>"
+# All dataset creators, written as ACDD creator_name / creator_email.
+CREATORS = (
+    "Jussi Tiira <jussi.tiira@fmi.fi>",
+    "Joonas Karjalainen <joonas.karjalainen@fmi.fi>",
+    "Jenna Ritvanen <jenna.ritvanen@fmi.fi>",
+)
+INSTITUTION = "Finnish Meteorological Institute"
 
 # populate stops before writing a shard if free space on the output
 # filesystem would be below max(MIN_FREE_BYTES, MIN_FREE_FRACTION * size).

@@ -73,6 +73,7 @@ def cmd_create(args: argparse.Namespace) -> None:
         created_by=args.created_by,
         dataset_version=args.dataset_version,
         overwrite=args.overwrite,
+        creators=args.creators,
     )
     if not axis.dropped.empty:
         dropped = Path(str(args.store) + ".dropped.csv")
@@ -133,7 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--shard-size", type=int, default=config.SHARD_SIZE)
     sp.add_argument("--clevel", type=int, default=config.CLEVEL)
     sp.add_argument("--license", default=config.LICENSE)
-    sp.add_argument("--created-by", default=config.CREATED_BY)
+    sp.add_argument("--created-by", default=config.CREATED_BY, help="single 'Name <email>' contact")
+    sp.add_argument(
+        "--creators",
+        nargs="+",
+        default=list(config.CREATORS),
+        metavar="'NAME <EMAIL>'",
+        help="all dataset creators (ACDD creator_name/creator_email)",
+    )
     sp.add_argument("--dataset-version", default=config.DATASET_VERSION)
     sp.add_argument("--overwrite", action="store_true")
     sp.set_defaults(func=cmd_create)

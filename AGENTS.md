@@ -192,6 +192,11 @@ Key requirements that shape the design (read the spec in the validator's
   `mlcast_dataset_version`, `mlcast_dataset_validator_version`,
   `mlcast_dataset_identifier` (`FI-FMI-dbz`). `mlcast_created_with` must
   point to an existing tagged GitHub revision.
+- `mlcast_created_by` takes a single `Name <email>` in validator 0.4.0
+  (validator `main` accepts a comma-separated list, but no release has it
+  yet). All creators go in ACDD `creator_name`/`creator_email`
+  (`config.CREATORS`). Once a validator release accepts the list, switch
+  `mlcast_created_by` to it and bump `VALIDATOR_VERSION`.
 
 ## Conventions
 

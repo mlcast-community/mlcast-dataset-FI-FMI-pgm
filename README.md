@@ -130,8 +130,8 @@ because the MLCast specification expects every data variable to be a
 gridded `(time, y, x)` field.
 
 ```python
-(ds.radar_status == 1).sum("radar")      # number of contributing radars per timestep
-ds.radar_status.sel(radar="KOR")         # history of one radar
+(ds.radar_status == 1).sum("radar")  # number of contributing radars per timestep
+ds.radar_status.sel(radar="KOR")  # history of one radar
 ```
 
 ## Repository structure
@@ -273,6 +273,15 @@ uv run ruff format
 The inventory, bad-file list and source paths are environment-specific and
 depend on access to FMI's internal radar archive. The output dataset uses
 Zarr v3 with sharding.
+
+## Authors
+
+- Jussi Tiira (jussi.tiira@fmi.fi), contact person (`mlcast_created_by`)
+- Joonas Karjalainen (joonas.karjalainen@fmi.fi)
+- Jenna Ritvanen (jenna.ritvanen@fmi.fi)
+
+Finnish Meteorological Institute. All three are listed in the dataset's
+`creator_name` and `creator_email` attributes.
 
 ## Dataset license
 

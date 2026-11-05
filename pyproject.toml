@@ -6,7 +6,8 @@ readme = "README.md"
 license = "MIT"
 authors = [
     { name = "Jussi Tiira", email = "jussi.tiira@fmi.fi" },
-    { name = "Joonas Karjalainen", email = "joonas.karjalainen@fmi.fi"}
+    { name = "Joonas Karjalainen", email = "joonas.karjalainen@fmi.fi"},
+    { name = "Jenna Ritvanen", email = "jenna.ritvanen@fmi.fi"},
 ]
 requires-python = ">=3.11"
 dependencies = [

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import dask.array as da
@@ -94,19 +96,40 @@ def build_dataset(
     return ds
 
 
+_CONTACT_RE = re.compile(r"^\s*([^<>,]+?)\s*<([^<>\s,]+@[^<>\s,]+)>\s*$")
+
+
+def creator_attrs(creators: Sequence[str]) -> dict:
+    """ACDD creator attributes from "Name <email>" entries."""
+    names, emails = [], []
+    for entry in creators:
+        m = _CONTACT_RE.match(entry)
+        if not m:
+            raise ValueError(f"creator {entry!r} is not in 'Name <email>' format")
+        names.append(m.group(1))
+        emails.append(m.group(2))
+    return {
+        "creator_name": ", ".join(names),
+        "creator_email": ", ".join(emails),
+        "creator_institution": config.INSTITUTION,
+    }
+
+
 def global_attrs(
     times: pd.DatetimeIndex,
     var_name: str,
     license: str,
     created_by: str,
     dataset_version: str,
+    creators: Sequence[str] = config.CREATORS,
 ) -> dict:
     return {
         "title": "FMI radar reflectivity composite (lowest CAPPI, SUOMI1 grid)",
-        "institution": "Finnish Meteorological Institute",
+        "institution": config.INSTITUTION,
         "source": "FMI operational weather radar network composite",
         "Conventions": "CF-1.10",
         "license": license,
+        **creator_attrs(creators),
         "time_coverage_start": times[0].isoformat(),
         # The validator treats gaps as a variable timestep and then requires this;
         # the series is regular (with missing_times) from the very first step.
@@ -131,6 +154,7 @@ def create_store(
     created_by: str = config.CREATED_BY,
     dataset_version: str = config.DATASET_VERSION,
     overwrite: bool = False,
+    creators: Sequence[str] = config.CREATORS,
 ) -> xr.Dataset:
     """Write coordinates and metadata; the data array is left unwritten (all fill)."""
     store = Path(store)
@@ -141,7 +165,7 @@ def create_store(
 
     grid = Grid()
     times = pd.DatetimeIndex(axis.files["time"])
-    attrs = global_attrs(times, var_name, license, created_by, dataset_version)
+    attrs = global_attrs(times, var_name, license, created_by, dataset_version, creators)
     ds = build_dataset(axis, grid, var_name, shard_size, attrs)
 
     nt = ds.sizes["time"]
