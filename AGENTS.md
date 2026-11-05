@@ -77,9 +77,11 @@ Radar lines are `# radar <code> <flag> <lon> <lat>`. Flag 1 = contributed,
 flag 0 = in the network but not contributing (verified: on flag-0 files that
 radar's own coverage area turns into nodata and nothing else changes; with
 flag 1 in both files of a pair nothing is lost). Unlisted radars are not part
-of the network at that time. The list changes over the years (8–12 radars
-per file, 15 codes in total), and VAN has a second position for two weeks in
-January 2009 (the coordinates KER uses later that year).
+of the network at that time. The list changes over the years (up to 12
+radars per file, 15 codes in total; IKA and VAN are last listed at
+2022-06-15 10:05 and KAN first at 10:10). VAN is listed at a second position
+(the coordinates KER uses in May–July 2009) in 11 381 files between
+2008-12-19 and 2009-01-28.
 
 Pixel values (observed on a 2024 sample):
 - `255` – nodata / outside radar coverage
